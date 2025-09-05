@@ -1,33 +1,90 @@
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useRef } from 'react';
 import * as Location from 'expo-location';
 import { Platform } from 'react-native';
 import createContextHook from '@nkzw/create-context-hook';
+import AsyncStorage from '@react-native-async-storage/async-storage';
 import { Location as LocationType } from '@/types';
 
+interface ExtendedLocation extends LocationType {
+  heading?: number;
+  speed?: number;
+  timestamp?: number;
+}
+
+interface LocationHistory {
+  locations: ExtendedLocation[];
+  totalDistance: number;
+}
+
 interface LocationState {
-  currentLocation: LocationType | null;
+  currentLocation: ExtendedLocation | null;
   isTracking: boolean;
   hasPermission: boolean;
+  locationHistory: LocationHistory;
+  accuracy: 'high' | 'balanced' | 'low';
+  setAccuracy: (accuracy: 'high' | 'balanced' | 'low') => void;
   startTracking: () => Promise<boolean>;
   stopTracking: () => void;
   requestPermission: () => Promise<boolean>;
-  updateLocation: (location: LocationType) => void;
+  updateLocation: (location: ExtendedLocation) => void;
+  clearHistory: () => void;
+  calculateDistance: (lat1: number, lon1: number, lat2: number, lon2: number) => number;
 }
 
 export const [LocationProvider, useLocation] = createContextHook<LocationState>(() => {
-  const [currentLocation, setCurrentLocation] = useState<LocationType | null>(null);
+  const [currentLocation, setCurrentLocation] = useState<ExtendedLocation | null>(null);
   const [isTracking, setIsTracking] = useState<boolean>(false);
   const [hasPermission, setHasPermission] = useState<boolean>(false);
   const [locationSubscription, setLocationSubscription] = useState<Location.LocationSubscription | null>(null);
+  const [locationHistory, setLocationHistory] = useState<LocationHistory>({
+    locations: [],
+    totalDistance: 0,
+  });
+  const [accuracy, setAccuracy] = useState<'high' | 'balanced' | 'low'>('balanced');
+  const webWatchIdRef = useRef<number | null>(null);
 
   useEffect(() => {
     checkPermission();
+    loadLastLocation();
     return () => {
       if (locationSubscription) {
         locationSubscription.remove();
       }
+      if (webWatchIdRef.current !== null && Platform.OS === 'web') {
+        navigator.geolocation.clearWatch(webWatchIdRef.current);
+      }
     };
   }, []);
+
+  const calculateDistance = (lat1: number, lon1: number, lat2: number, lon2: number): number => {
+    const R = 6371; // Earth's radius in km
+    const dLat = (lat2 - lat1) * Math.PI / 180;
+    const dLon = (lon2 - lon1) * Math.PI / 180;
+    const a = Math.sin(dLat/2) * Math.sin(dLat/2) +
+              Math.cos(lat1 * Math.PI / 180) * Math.cos(lat2 * Math.PI / 180) *
+              Math.sin(dLon/2) * Math.sin(dLon/2);
+    const c = 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1-a));
+    return R * c;
+  };
+
+  const loadLastLocation = async () => {
+    try {
+      const stored = await AsyncStorage.getItem('lastKnownLocation');
+      if (stored) {
+        setCurrentLocation(JSON.parse(stored));
+      }
+    } catch (error) {
+      console.error('Failed to load last location:', error);
+    }
+  };
+
+  const saveLocation = async (location: ExtendedLocation) => {
+    try {
+      await AsyncStorage.setItem('lastKnownLocation', JSON.stringify(location));
+    } catch (error) {
+      console.error('Failed to save location:', error);
+    }
+  };
 
   const checkPermission = async () => {
     if (Platform.OS === 'web') {
@@ -47,7 +104,16 @@ export const [LocationProvider, useLocation] = createContextHook<LocationState>(
       return new Promise((resolve) => {
         if ('geolocation' in navigator) {
           navigator.geolocation.getCurrentPosition(
-            () => {
+            (position) => {
+              const location: ExtendedLocation = {
+                latitude: position.coords.latitude,
+                longitude: position.coords.longitude,
+                heading: position.coords.heading || undefined,
+                speed: position.coords.speed || undefined,
+                timestamp: Date.now(),
+              };
+              setCurrentLocation(location);
+              saveLocation(location);
               setHasPermission(true);
               resolve(true);
             },
@@ -62,10 +128,54 @@ export const [LocationProvider, useLocation] = createContextHook<LocationState>(
       });
     }
 
-    const { status } = await Location.requestForegroundPermissionsAsync();
-    const granted = status === 'granted';
+    const { status: foregroundStatus } = await Location.requestForegroundPermissionsAsync();
+    const granted = foregroundStatus === 'granted';
+    
+    if (granted) {
+      // Also request background permissions for continuous tracking
+      try {
+        const { status: backgroundStatus } = await Location.requestBackgroundPermissionsAsync();
+        console.log('Background location permission:', backgroundStatus);
+      } catch (error) {
+        console.log('Background permission not available');
+      }
+    }
+    
     setHasPermission(granted);
     return granted;
+  };
+
+  const getAccuracyLevel = () => {
+    switch (accuracy) {
+      case 'high':
+        return Location.Accuracy.BestForNavigation;
+      case 'balanced':
+        return Location.Accuracy.Balanced;
+      case 'low':
+        return Location.Accuracy.Low;
+      default:
+        return Location.Accuracy.Balanced;
+    }
+  };
+
+  const updateLocationWithHistory = (newLocation: ExtendedLocation) => {
+    setCurrentLocation(prev => {
+      if (prev) {
+        const distance = calculateDistance(
+          prev.latitude,
+          prev.longitude,
+          newLocation.latitude,
+          newLocation.longitude
+        );
+        
+        setLocationHistory(history => ({
+          locations: [...history.locations.slice(-99), newLocation],
+          totalDistance: history.totalDistance + distance,
+        }));
+      }
+      return newLocation;
+    });
+    saveLocation(newLocation);
   };
 
   const startTracking = async (): Promise<boolean> => {
@@ -79,24 +189,27 @@ export const [LocationProvider, useLocation] = createContextHook<LocationState>(
       if ('geolocation' in navigator) {
         const watchId = navigator.geolocation.watchPosition(
           (position) => {
-            const location: LocationType = {
+            const location: ExtendedLocation = {
               latitude: position.coords.latitude,
               longitude: position.coords.longitude,
+              heading: position.coords.heading || undefined,
+              speed: position.coords.speed || undefined,
+              timestamp: Date.now(),
             };
-            setCurrentLocation(location);
+            updateLocationWithHistory(location);
           },
           (error) => {
             console.error('Web geolocation error:', error);
           },
           {
-            enableHighAccuracy: true,
+            enableHighAccuracy: accuracy === 'high',
             timeout: 10000,
-            maximumAge: 5000,
+            maximumAge: accuracy === 'high' ? 0 : 5000,
           }
         );
         
+        webWatchIdRef.current = watchId;
         setIsTracking(true);
-        // Store watchId for cleanup (we'll use a ref-like approach)
         return true;
       }
       return false;
@@ -105,16 +218,19 @@ export const [LocationProvider, useLocation] = createContextHook<LocationState>(
     try {
       const subscription = await Location.watchPositionAsync(
         {
-          accuracy: Location.Accuracy.High,
-          timeInterval: 3000, // Update every 3 seconds
-          distanceInterval: 10, // Update every 10 meters
+          accuracy: getAccuracyLevel(),
+          timeInterval: accuracy === 'high' ? 1000 : 3000,
+          distanceInterval: accuracy === 'high' ? 5 : 10,
         },
         (location) => {
-          const newLocation: LocationType = {
+          const newLocation: ExtendedLocation = {
             latitude: location.coords.latitude,
             longitude: location.coords.longitude,
+            heading: location.coords.heading || undefined,
+            speed: location.coords.speed || undefined,
+            timestamp: Date.now(),
           };
-          setCurrentLocation(newLocation);
+          updateLocationWithHistory(newLocation);
         }
       );
 
@@ -129,8 +245,10 @@ export const [LocationProvider, useLocation] = createContextHook<LocationState>(
 
   const stopTracking = () => {
     if (Platform.OS === 'web') {
-      // For web, we'd need to store the watchId and clear it
-      // This is a simplified version
+      if (webWatchIdRef.current !== null) {
+        navigator.geolocation.clearWatch(webWatchIdRef.current);
+        webWatchIdRef.current = null;
+      }
       setIsTracking(false);
       return;
     }
@@ -142,17 +260,26 @@ export const [LocationProvider, useLocation] = createContextHook<LocationState>(
     setIsTracking(false);
   };
 
-  const updateLocation = (location: LocationType) => {
-    setCurrentLocation(location);
+  const updateLocation = (location: ExtendedLocation) => {
+    updateLocationWithHistory(location);
+  };
+
+  const clearHistory = () => {
+    setLocationHistory({ locations: [], totalDistance: 0 });
   };
 
   return {
     currentLocation,
     isTracking,
     hasPermission,
+    locationHistory,
+    accuracy,
+    setAccuracy,
     startTracking,
     stopTracking,
     requestPermission,
     updateLocation,
+    clearHistory,
+    calculateDistance,
   };
 });

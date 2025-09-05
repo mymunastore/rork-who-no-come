@@ -15,7 +15,10 @@ import {
   History,
   Settings,
   Plus,
-  TrendingUp
+  TrendingUp,
+  Navigation2,
+  BarChart3,
+  Bell
 } from 'lucide-react-native';
 import { Colors } from '@/constants/colors';
 
@@ -68,32 +71,32 @@ export function QuickActions({ isDriver = false }: QuickActionsProps) {
 
   const driverActions: QuickAction[] = [
     {
-      id: 'earnings',
-      title: 'Earnings',
-      icon: <TrendingUp size={24} color="white" />,
+      id: 'analytics',
+      title: 'Analytics',
+      icon: <BarChart3 size={24} color="white" />,
       color: Colors.success,
-      onPress: () => console.log('View earnings'),
+      route: '/driver-analytics',
+    },
+    {
+      id: 'optimize',
+      title: 'Optimize',
+      icon: <Navigation2 size={24} color="white" />,
+      color: Colors.primary,
+      route: '/route-optimizer',
     },
     {
       id: 'active',
       title: 'Active',
       icon: <Package size={24} color="white" />,
-      color: Colors.primary,
+      color: Colors.secondary,
       route: '/deliveries',
     },
     {
-      id: 'schedule',
-      title: 'Schedule',
-      icon: <Clock size={24} color="white" />,
-      color: Colors.secondary,
-      onPress: () => console.log('View schedule'),
-    },
-    {
-      id: 'settings',
-      title: 'Settings',
-      icon: <Settings size={24} color="white" />,
-      color: Colors.info,
-      route: '/profile',
+      id: 'notifications',
+      title: 'Alerts',
+      icon: <Bell size={24} color="white" />,
+      color: Colors.warning,
+      route: '/notifications',
     },
   ];
 
