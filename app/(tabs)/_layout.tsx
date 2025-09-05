@@ -52,7 +52,6 @@ export default function TabLayout() {
                   style={styles.newDeliveryButton}
                   onPress={() => router.push("/create-delivery")}
                   activeOpacity={0.7}
-                  disabled={props.disabled || false}
                 >
                   <View style={styles.plusButton}>
                     <Plus color="#FFFFFF" size={24} />

@@ -7,24 +7,29 @@ import {
   TouchableOpacity,
   RefreshControl,
   Image,
+  Animated,
 } from "react-native";
 import { useRouter } from "expo-router";
-import { MapPin, Package, Clock, Navigation } from "lucide-react-native";
+import { MapPin, Package, Clock, Navigation, Bell, TrendingUp, Star } from "lucide-react-native";
 import { Colors } from "@/constants/colors";
 import { useAuth } from "@/hooks/auth-store";
 import { useDelivery } from "@/hooks/delivery-store";
+import { useNotifications } from "@/hooks/notification-store";
 import { DeliveryCard } from "@/components/DeliveryCard";
 import { DriverCard } from "@/components/DriverCard";
 import { Button } from "@/components/Button";
 import { StatusStepper } from "@/components/StatusStepper";
+import { QuickActions } from "@/components/QuickActions";
 import { mockDrivers } from "@/mocks/data";
 
 export default function HomeScreen() {
   const router = useRouter();
   const { user } = useAuth();
   const { activeDelivery, deliveries, isLoading } = useDelivery();
+  const { unreadCount } = useNotifications();
   
   const [refreshing, setRefreshing] = useState(false);
+  const fadeAnim = useState(new Animated.Value(0))[0];
   
   const isDriver = user?.role === "driver";
   const recentDeliveries = deliveries
@@ -39,6 +44,14 @@ export default function HomeScreen() {
     }, 1000);
   };
 
+  useEffect(() => {
+    Animated.timing(fadeAnim, {
+      toValue: 1,
+      duration: 800,
+      useNativeDriver: true,
+    }).start();
+  }, []);
+
   if (!user) return null;
 
   return (
@@ -49,20 +62,59 @@ export default function HomeScreen() {
         <RefreshControl refreshing={refreshing} onRefresh={onRefresh} />
       }
     >
-      <View style={styles.header}>
-        <View>
-          <Text style={styles.greeting}>Hello, {user.name.split(' ')[0]}</Text>
+      <Animated.View style={[styles.header, { opacity: fadeAnim }]}>
+        <View style={styles.headerLeft}>
+          <Text style={styles.greeting}>Hello, {user.name.split(' ')[0]} 👋</Text>
           <Text style={styles.subtitle}>
             {isDriver ? "Ready for your next delivery?" : "Need something delivered?"}
           </Text>
         </View>
-        <TouchableOpacity onPress={() => router.push("/profile")}>
-          <Image 
-            source={{ uri: user.avatar || "https://images.unsplash.com/photo-1633332755192-727a05c4013d?ixlib=rb-1.2.1&auto=format&fit=crop&w=200&q=80" }} 
-            style={styles.avatar}
-          />
-        </TouchableOpacity>
-      </View>
+        <View style={styles.headerRight}>
+          <TouchableOpacity 
+            onPress={() => router.push("/notifications")} 
+            style={styles.notificationButton}
+          >
+            <Bell size={24} color={Colors.text} />
+            {unreadCount > 0 && (
+              <View style={styles.badge}>
+                <Text style={styles.badgeText}>
+                  {unreadCount > 9 ? '9+' : unreadCount}
+                </Text>
+              </View>
+            )}
+          </TouchableOpacity>
+          <TouchableOpacity onPress={() => router.push("/profile")}>
+            <Image 
+              source={{ uri: user.avatar || "https://images.unsplash.com/photo-1633332755192-727a05c4013d?ixlib=rb-1.2.1&auto=format&fit=crop&w=200&q=80" }} 
+              style={styles.avatar}
+            />
+          </TouchableOpacity>
+        </View>
+      </Animated.View>
+
+      {/* Quick Actions */}
+      <QuickActions isDriver={isDriver} />
+
+      {/* Quick Stats for Drivers */}
+      {isDriver && (
+        <View style={styles.statsContainer}>
+          <View style={styles.statCard}>
+            <TrendingUp size={20} color={Colors.success} />
+            <Text style={styles.statValue}>12</Text>
+            <Text style={styles.statLabel}>Today</Text>
+          </View>
+          <View style={styles.statCard}>
+            <Star size={20} color={Colors.warning} />
+            <Text style={styles.statValue}>4.8</Text>
+            <Text style={styles.statLabel}>Rating</Text>
+          </View>
+          <View style={styles.statCard}>
+            <Package size={20} color={Colors.primary} />
+            <Text style={styles.statValue}>156</Text>
+            <Text style={styles.statLabel}>Total</Text>
+          </View>
+        </View>
+      )}
 
       {/* Active Delivery Section */}
       {activeDelivery ? (
@@ -330,5 +382,60 @@ const styles = StyleSheet.create({
     fontSize: 14,
     color: Colors.primary,
     fontWeight: "500",
+  },
+  headerLeft: {
+    flex: 1,
+  },
+  headerRight: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 12,
+  },
+  notificationButton: {
+    position: 'relative',
+    padding: 4,
+  },
+  badge: {
+    position: 'absolute',
+    top: -4,
+    right: -4,
+    backgroundColor: Colors.error,
+    borderRadius: 10,
+    minWidth: 20,
+    height: 20,
+    justifyContent: 'center',
+    alignItems: 'center',
+    paddingHorizontal: 4,
+  },
+  badgeText: {
+    color: 'white',
+    fontSize: 10,
+    fontWeight: '600',
+  },
+  statsContainer: {
+    flexDirection: 'row',
+    paddingHorizontal: 16,
+    marginTop: 16,
+    gap: 12,
+  },
+  statCard: {
+    flex: 1,
+    backgroundColor: Colors.card,
+    borderRadius: 12,
+    padding: 12,
+    alignItems: 'center',
+    borderWidth: 1,
+    borderColor: Colors.border,
+  },
+  statValue: {
+    fontSize: 20,
+    fontWeight: '700',
+    color: Colors.text,
+    marginTop: 8,
+  },
+  statLabel: {
+    fontSize: 12,
+    color: Colors.textLight,
+    marginTop: 2,
   },
 });
