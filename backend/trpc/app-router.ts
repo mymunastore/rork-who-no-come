@@ -7,8 +7,12 @@ import acceptDeliveryProcedure from "./routes/deliveries/accept/route";
 import updateDeliveryStatusProcedure from "./routes/deliveries/update-status/route";
 import toggleRiderStatusProcedure from "./routes/riders/toggle-status/route";
 import updateRiderLocationProcedure from "./routes/riders/update-location/route";
+import healthCheckProcedure from "./routes/health/check/route";
 
 export const appRouter = createTRPCRouter({
+  health: createTRPCRouter({
+    check: healthCheckProcedure,
+  }),
   example: createTRPCRouter({
     hi: hiRoute,
   }),

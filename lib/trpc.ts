@@ -6,13 +6,17 @@ import superjson from "superjson";
 export const trpc = createTRPCReact<AppRouter>();
 
 const getBaseUrl = () => {
-  if (process.env.EXPO_PUBLIC_RORK_API_BASE_URL) {
-    return process.env.EXPO_PUBLIC_RORK_API_BASE_URL;
+  // For development, use the backend URL provided by the platform
+  if (typeof window !== 'undefined') {
+    // In browser/web environment
+    const currentUrl = window.location.origin;
+    // Use the same origin for API calls in development
+    return currentUrl;
   }
-
-  throw new Error(
-    "No base url found, please set EXPO_PUBLIC_RORK_API_BASE_URL"
-  );
+  
+  // For mobile apps, you might need to configure this differently
+  // Default to localhost for development
+  return process.env.EXPO_PUBLIC_RORK_API_BASE_URL || 'http://localhost:3000';
 };
 
 export const trpcClient = trpc.createClient({

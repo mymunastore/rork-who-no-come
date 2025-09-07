@@ -5,6 +5,7 @@ import { useEffect, useState } from "react";
 import { Delivery, DeliveryStatus, Location, PaymentMethod } from "@/types";
 import { mockDeliveries, getNearbyDrivers } from "@/mocks/data";
 import { useAuth } from "./auth-store";
+import { trpc } from "@/lib/trpc";
 
 interface DeliveryState {
   deliveries: Delivery[];
@@ -22,10 +23,70 @@ export const [DeliveryProvider, useDelivery] = createContextHook<DeliveryState>(
   const [deliveries, setDeliveries] = useState<Delivery[]>([]);
   const [activeDelivery, setActiveDelivery] = useState<Delivery | null>(null);
 
-  // Fetch deliveries from storage or mock data
+  // Try to fetch from backend first, fallback to local storage/mock data
+  const backendDeliveriesQuery = trpc.deliveries.list.useQuery(
+    {
+      userType: user?.role === "driver" ? "rider" : "client",
+      userId: user?.id || "",
+      status: "all",
+    },
+    {
+      enabled: !!user,
+      retry: 1,
+      retryDelay: 1000,
+    }
+  );
+
+  // Log backend query status
+  useEffect(() => {
+    if (backendDeliveriesQuery.isSuccess) {
+      console.log("✅ Backend deliveries fetched successfully:", backendDeliveriesQuery.data);
+    }
+    if (backendDeliveriesQuery.isError) {
+      console.log("⚠️ Backend deliveries fetch failed (will use fallback):", backendDeliveriesQuery.error?.message);
+    }
+  }, [backendDeliveriesQuery.isSuccess, backendDeliveriesQuery.isError, backendDeliveriesQuery.data, backendDeliveriesQuery.error]);
+
+  // Fallback to local storage if backend fails
   const deliveriesQuery = useQuery({
     queryKey: ["deliveries", user?.id],
     queryFn: async () => {
+      // First try to use backend data if available
+      if (backendDeliveriesQuery.data?.deliveries) {
+        const backendDeliveries = backendDeliveriesQuery.data.deliveries.map((d: any) => ({
+          id: d.id,
+          customerId: user?.id || "",
+          driverId: d.rider?.id,
+          pickupLocation: {
+            latitude: 6.5244,
+            longitude: 3.3792,
+            address: d.pickupAddress,
+          },
+          dropoffLocation: {
+            latitude: 6.4541,
+            longitude: 3.3947,
+            address: d.dropoffAddress,
+          },
+          status: d.status,
+          items: "Package",
+          price: d.fare,
+          distance: parseFloat(d.distance),
+          estimatedTime: parseInt(d.estimatedTime),
+          createdAt: new Date(d.createdAt),
+          paymentMethod: {
+            id: "default",
+            type: "cash",
+            details: "Cash on delivery",
+            isDefault: true,
+          } as PaymentMethod,
+        }));
+        
+        // Save to local storage
+        await AsyncStorage.setItem("deliveries", JSON.stringify(backendDeliveries));
+        return backendDeliveries;
+      }
+      
+      // Fallback to local storage
       try {
         const storedDeliveries = await AsyncStorage.getItem("deliveries");
         if (storedDeliveries) {
@@ -68,13 +129,67 @@ export const [DeliveryProvider, useDelivery] = createContextHook<DeliveryState>(
     }
   };
 
+  // Try backend first, fallback to local creation
+  const backendCreateMutation = trpc.deliveries.create.useMutation();
+  
   // Create delivery mutation
   const createDeliveryMutation = useMutation({
     mutationFn: async (deliveryData: Partial<Delivery>): Promise<Delivery> => {
+      if (!user) throw new Error("User not authenticated");
+      
+      // Try to create via backend first
+      try {
+        console.log("📤 Attempting to create delivery via backend...");
+        const backendResult = await backendCreateMutation.mutateAsync({
+          pickupAddress: deliveryData.pickupLocation?.address || "",
+          pickupCoordinates: {
+            latitude: deliveryData.pickupLocation?.latitude || 0,
+            longitude: deliveryData.pickupLocation?.longitude || 0,
+          },
+          dropoffAddress: deliveryData.dropoffLocation?.address || "",
+          dropoffCoordinates: {
+            latitude: deliveryData.dropoffLocation?.latitude || 0,
+            longitude: deliveryData.dropoffLocation?.longitude || 0,
+          },
+          packageDetails: {
+            description: deliveryData.items || "Package",
+            weight: "1kg",
+            fragile: false,
+          },
+          recipientInfo: {
+            name: user.name,
+            phone: user.phone || "",
+          },
+          paymentMethod: (deliveryData.paymentMethod?.type || "cash") as "cash" | "card" | "wallet",
+          estimatedFare: deliveryData.price || 0,
+        });
+        
+        if (backendResult.success && backendResult.delivery) {
+          console.log("✅ Delivery created successfully via backend:", backendResult.delivery.id);
+          // Convert backend format to our Delivery type
+          return {
+            id: backendResult.delivery.id,
+            customerId: user.id,
+            pickupLocation: deliveryData.pickupLocation as Location,
+            dropoffLocation: deliveryData.dropoffLocation as Location,
+            status: "pending",
+            items: deliveryData.items || "Package",
+            notes: deliveryData.notes,
+            price: backendResult.delivery.estimatedFare || deliveryData.price || 0,
+            distance: deliveryData.distance || 0,
+            estimatedTime: deliveryData.estimatedTime || 0,
+            createdAt: new Date(),
+            scheduledFor: deliveryData.scheduledFor,
+            paymentMethod: deliveryData.paymentMethod as PaymentMethod,
+          };
+        }
+      } catch (error) {
+        console.log("⚠️ Backend creation failed, using local creation:", error);
+      }
+      
+      // Fallback to local creation
       // Simulate API delay
       await new Promise(resolve => setTimeout(resolve, 1000));
-      
-      if (!user) throw new Error("User not authenticated");
       
       // Create a new delivery
       const newDelivery: Delivery = {
@@ -116,9 +231,28 @@ export const [DeliveryProvider, useDelivery] = createContextHook<DeliveryState>(
     },
   });
 
+  // Try backend first for status updates
+  const backendUpdateStatusMutation = trpc.deliveries.updateStatus.useMutation();
+  
   // Update delivery status mutation
   const updateStatusMutation = useMutation({
     mutationFn: async ({ id, status }: { id: string; status: DeliveryStatus }): Promise<Delivery> => {
+      // Try backend first
+      try {
+        const backendResult = await backendUpdateStatusMutation.mutateAsync({
+          deliveryId: id,
+          status: status as any,
+          riderId: user?.id || "",
+        });
+        
+        if (backendResult.success) {
+          console.log("✅ Delivery status updated via backend:", status);
+        }
+      } catch (error) {
+        console.log("⚠️ Backend status update failed, using local update:", error);
+      }
+      
+      // Continue with local update
       // Simulate API delay
       await new Promise(resolve => setTimeout(resolve, 800));
       
